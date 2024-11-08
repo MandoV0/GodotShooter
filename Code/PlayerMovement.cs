@@ -4,31 +4,54 @@ using System;
 public partial class PlayerMovement : CharacterBody3D
 {
     public double LookSensitivity = 0.05f;
-    public float Speed = 8.0f;
-    public float Acceleration = 8.0f;
-    public float Deacceleration = 8.0f;
-    public float AirAcceleration = 1f;
-    public float AirDeacceleration = 1f;
-    public float JumpForce = 15.0f;
-    public const float GRAVITY = 13f;
-
-    public float BaseFov = 90.0f;
-    public float MaxFov = 103.0f;
+    // Player Movement Speed
+    [ExportCategory("Movement - Settings")]
+    [Export] public float Speed = 12.0f;
+    [Export] public float Acceleration = 20.0f;
+    [Export] public float Deacceleration = 10.0f;
+    [Export] public float AirAcceleration = 10.0f;
+    [Export] public float AirDeacceleration = 10.0f;
+    [Export] public float AirControl = 0.5f;
+    [Export] public float JumpForce = 15.0f;
+    [Export] public int MaxJumps = 2;
+    
+    [Export] public float GRAVITY = 20f;
+    
+    [ExportCategory("Camera - Settings")]
+    [Export] public float BaseFov = 90.0f;
+    [Export] public float MaxFov = 103.0f;
 
     [Export] public Node3D CameraTransform;
     [Export] public Camera3D PlayerCamera;
+    
+    [ExportCategory("Dash - Settings")]
+    [Export] public float DashSpeed = 20.0f;
+    [Export] public float DashCooldown = 1.0f;
+    [Export] public float DashDuration = 0.2f;
+    [Export] public bool _isDashing = false;
+    [Export] public float _dashTime = 0.0f;
+    [Export] public float _lastDashTime = 0.0f;
+
+    [ExportCategory("Ground Check - Settings")] 
+    [Export] public RayCast3D GroundCheckRaycaster;
+    [Export] public float MaxDistanceToGround = -0.1f;
+    
+    private int _jumpsLeft;
 
     private Vector3 _velocity = Vector3.Zero;
     private float _velocityY = 0.0f;
 
     private Vector2 _mouseInput = Vector2.Zero;
-    private Vector3 _cameraRotation = Vector3.Zero; 
+    private Vector3 _cameraRotation = Vector3.Zero;
+
+    private bool _wasGroundedLastFrame;
 
     public override void _Ready()
     {
         Engine.MaxFps = 144;
         Input.SetMouseMode(Input.MouseModeEnum.Captured);
         PlayerCamera.Fov = BaseFov;
+        _jumpsLeft = MaxJumps;
     }
 
     public override void _Input(InputEvent @event)
@@ -39,8 +62,8 @@ public partial class PlayerMovement : CharacterBody3D
         }
     }
 
-    public float GetAcceleration() => IsOnFloor() ? Acceleration : AirAcceleration;
-    public float GetDeacceleration() => IsOnFloor() ? Deacceleration : AirDeacceleration;
+    public float GetAcceleration() => IsGrounded() ? Acceleration : AirAcceleration;
+    public float GetDeacceleration() => IsGrounded() ? Deacceleration : AirDeacceleration;
     
     public Vector2 GetMoveInput() => Input.GetVector("left", "right", "up", "down");
 
@@ -58,8 +81,17 @@ public partial class PlayerMovement : CharacterBody3D
 
     private void Move(double delta)
     {
-        Vector2 moveInput = GetMoveInput();
-        Vector3 moveVector = Transform.Basis * new Vector3(moveInput.X, 0, moveInput.Y);        // Tranform.basis so we face the look direction
+        Vector2 moveInput = GetMoveInput().Normalized();
+        Vector3 moveVector = GetMoveVector();
+        
+        if (IsGrounded() && !_wasGroundedLastFrame)
+        {
+            _velocityY = 0;
+            _jumpsLeft = MaxJumps;
+        }
+        
+        if (!IsGrounded()) _velocityY -= GRAVITY * (float)delta;
+
         if (moveInput != Vector2.Zero)
         {
             _velocity = _velocity.Lerp(moveVector * Speed, (float)(GetAcceleration() * delta));
@@ -68,6 +100,28 @@ public partial class PlayerMovement : CharacterBody3D
         {
             _velocity = _velocity.Lerp(moveVector * Speed, (float)(GetDeacceleration() * delta));
         }
+    }
+
+    private Vector3 GetMoveVector()
+    {
+        Vector2 moveInput = GetMoveInput();
+        return Transform.Basis * new Vector3(moveInput.X, 0, moveInput.Y);
+    }
+
+    public void OnDash()
+    {
+        if (_isDashing || Time.GetTicksMsec() - _lastDashTime < DashCooldown * 1000)
+        {
+            return; 
+        }
+
+        Vector3 moveDir = GetMoveVector();
+        
+        if (moveDir == Vector3.Zero) return;
+        _isDashing = true;
+        _dashTime = DashDuration;
+        _lastDashTime = Time.GetTicksMsec();
+        _velocity = moveDir * DashSpeed;
     }
 
     public void Look()
@@ -86,25 +140,42 @@ public partial class PlayerMovement : CharacterBody3D
 
     public override void _PhysicsProcess(double delta)
     {
-        if (!IsOnFloor())
-        { 
-            _velocityY -= GRAVITY * (float)delta;
+        if (Input.IsActionJustPressed("dash"))
+        {
+            OnDash();
         }
-        else {
-            _velocityY = 0;
+        
+        if (_isDashing)
+        {
+            _dashTime -= (float)delta;
+            if (_dashTime <= 0)
+            {
+                _isDashing = false;
+            }
         }
         
         HandleJump();
+        if (!_isDashing)
+        {
+            Move(delta);
+        }
         _velocity.Y = _velocityY;
-        Move(delta);
         Velocity = _velocity;
         MoveAndSlide();
+
+        _wasGroundedLastFrame = IsGrounded();
+    }
+
+    public bool IsGrounded()
+    {
+        return GroundCheckRaycaster.IsColliding();
     }
     
     private void HandleJump()
     {
-        if (IsOnFloor() && Input.IsActionJustPressed("jump"))
+        if (Input.IsActionJustPressed("jump") && (_jumpsLeft > 0 || IsGrounded()))
         {
+            _jumpsLeft--;
             _velocityY = JumpForce;
         }
     }
